@@ -2,11 +2,11 @@
 A classification model to predict molecule odor
 
 ### Data
-train.csv: Training data. Structure: molecule,scent_0,scent_1,etc...
+train.csv   - Training data structured as: molecule,scent_0,scent_1,...scent_n\n
 
-test.csv: Testing data. Structure: molecule\n
+test.csv    - Testing data. Structure: molecule\n
 
-vocab.txt: txt file where each word contains a possible scent.
+vocab.txt   - txt file containing all possible scents.
 
 ### Preprocessing
 To preprocess the data, you should call the function 'get_data', which takes in train.csv, test.csv, and vocab.txt. 
