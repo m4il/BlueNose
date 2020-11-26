@@ -8,9 +8,8 @@ def read_file(file_name):
     helper function to read a .csv file.
 
     :param file_name: string, name of data file
-    :return: a 2d np array where the first index is a molecule
-             and the second index is a string of comma separated
-             scents.
+    :return: molecules: np array of SMILE molecules in string format
+             labels:    np array of comma-separated labels
     """
     # open the file passed in
     with open(file_name, newline='') as csvfile:
@@ -18,19 +17,56 @@ def read_file(file_name):
         reader = csv.reader(csvfile, delimiter=' ')
         molecules = []
         labels = []
+        i=0
         for row in reader:
+            i+=1
             # Split on only the first column, separating molecule and words
             strs = row[0].split(',', 1)
             # avoid garbage
-            if len(strs) > 1:
-                # replace redundant string quotes
-                strs[1] = strs[1].replace('"', '')
+            if strs != ['']:
                 molecules.append(strs[0])
-                labels.append(strs[1])
-        # stack the arrays
-        data = np.stack([molecules[1:], labels[1:]])
-        # print(file_name, data)
-        return data
+                # deal with labels
+                if len(strs) > 1:
+                    # replace redundant string quotes
+                    strs[1] = strs[1].replace('"', '')
+                    labels.append(strs[1])
+
+        mols = np.array(molecules[1:])
+        labs = np.array(labels[1:])
+
+        return mols, labs
+
+def multi_hot(labels, vocab):
+    """
+    A helper function used to convert a 2D data array into a 1d example
+    array and a second 2D multi-hot arrayself.
+
+    :param labels: 1D array of size (examples,)
+           vocab:  dictionary mapping {word: index}
+
+    :return: data:      np array of examples size (num examples,)
+             labels:    2D np array of labels size (num examples, vocab_size)
+    """
+
+    # convert the labels to arrays, replacing words with indices
+    idx_labels = []
+    for l in labels:
+        # for each label, ie: ['lavendar,floral,earthy']
+        indices = []
+        scents = l.split(',') # split string
+        for s in scents:
+            # get the index of each individual scent
+            indices.append(vocab[s])
+        idx_labels.append(indices)
+    idx_labels = np.array(idx_labels)
+
+    # construct an array of 0s to use as multi-hot vectors
+    z = np.zeros((len(labels), len(vocab)))
+    for i in range(len(idx_labels)):
+        for l in range(len(idx_labels[i])):
+            z[i, idx_labels[i][l]] = 1
+
+    return z
 
 def get_data(test_file, train_file, vocab_file, num_scents=3):
     """
@@ -38,17 +74,23 @@ def get_data(test_file, train_file, vocab_file, num_scents=3):
 
     The goal here is to construct a few numpy arrays
 
+    Training examples: 4135
+    Testing examples: 1079
+    Vocabulary size: 110
+
     :param train_file:  path to training csv
            test_file:   path to training csv
            vocab_file:  path to vocabulary txt file
-    :return: train:     3d array of size [training examples, 1, num_scents]
-             test:      3d array of size [testing examples, 1, num_scents]
-             vocab      a dictionary mapping {index: word}
+
+    :return: train_mol:     np array of size (training examples,)
+             train_labels:  2D np array of size (training examples, vocab_size)
+             test_data:     np array of size (testing examples,)
+             vocab          a dictionary mapping {word: index}
     """
 
     # Read in training and testing files
-    train = read_file(train_file)
-    test = read_file(test_file)
+    train_molecules, train_labels = read_file(train_file)
+    test_molecules, _ = read_file(test_file)
 
     # open the vocabulary file, read it in, and split on newlines
     f = open(vocab_file, "r")
@@ -58,30 +100,11 @@ def get_data(test_file, train_file, vocab_file, num_scents=3):
     # make a dictionary that maps word->int
     vocab = {words[i]:i for i in range(len(words))}
 
-    # # construct labs, an array of size [emxamples, 3]
-    # labs = []
-    # # replace words with dictionary values
-    # for i in range(len(train[1])):
-    #     labels = train[1, i]
-    #     scents = labels.split(",")
-    #
-    #     # replace with ints
-    #     three_scents = []
-    #     for j in range(num_scents):
-    #         if len(scents) > j:
-    #             # if there exists another scent for this molecule...
-    #             three_scents.append(vocab[scents[j]])
-    #         else:
-    #             # when there are no more scents, append empty str
-    #             three_scents.append(vocab[''])
-    #     labs.append(three_scents)
-    #
-    # # cast to numpy array, then stack them into train
-    # labs = np.array(labs)
-    # train = np.stack([train[0], labs[:, 0], labs[:, 1], labs[:, 2]])
-    # print(train)
+    # get multi hot vectors from the testing data
+    train_labels = multi_hot(train_labels, vocab)
 
-    return train, test, vocab
+    print(np.shape(train_molecules), np.shape(train_labels), np.shape(test_molecules))
+    return train_molecules, train_labels, test_molecules, vocab
+
 if __name__ == "__main__":
-    # read_file('./data/train.csv')
     get_data('./data/test.csv', './data/train.csv', './data/vocab.txt')
