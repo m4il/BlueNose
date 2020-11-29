@@ -167,32 +167,42 @@ def build_graph(smiles):
     Question: Do we save ndata as ('C', 'C', 'C', 'O', 'C') or do we create one hot vectors like in the hw
     '''
     # TODO: Initialize a DGL Graph
-    print(smiles)
+    #print(smiles)
+    print("smilestring",smiles)
     g = pysmiles.read_smiles(smiles)
+
     #edge_att = g.get_edge_data()
-    node_feats = g.nodes(data='element')
-    na = np.array(node_feats)
-    print(na)
-    t1 =tf.convert_to_tensor(na[:,1])
-    print("ft",t1)
+    raw_node_feats = g.nodes(data='element')
+    print("raw_node_feats",raw_node_feats)
+    na = np.array(list(raw_node_feats))
+    #print(na)
+    node_feats =tf.convert_to_tensor(na[:,1])
+    print("node_feats",node_feats)
 
 
 
     edata = g.edges(data='order')
-    na = np.array(edata)
-    #print(na)
-    #t2 = tf.convert_to_tensor(na[:,:,0])
-    #print("t2", t2)
-    #nd = tf.convert_to_tensor()
-    #ed = tf.convert_to_tensor(g.edges(data='order'))
-    #sprint("node",g.nodes(data='element'))
-    #print("edge",g.edges(data='order'))
-    #print("edge",e.edata)
+    bonds = list(edata)
+    na = np.array(bonds)
+
+    t2 = tf.convert_to_tensor(na[:,2])
+
     dgl_graph = dgl.from_networkx(g)
-    dgl_graph.ndata['node_features'] = nd
-    dgl_graph.edata['edge_features'] = ed
-    print("ndata",dgl.graph.ndata)
-    print("edata",dgl.graph.edata)
+    edge_data = []
+    dict = {frozenset((e1, e2)) : d for e1, e2, d in na}
+    src, dest  = dgl_graph.edges()
+    for e in zip(src.numpy(), dest.numpy()):
+        edge_data.append(dict[frozenset(e)])
+
+    edge_d_tensor = tf.convert_to_tensor(edge_data)
+    print("tensor", edge_d_tensor)
+    dgl_graph.ndata['node_feats'] = node_feats
+    dgl_graph.edata['edge_feats'] = edge_d_tensor
+    print(dgl_graph.edata['edge_feats'])
+    #print("graph edges", dgl_graph.edges())
+
+
+
     return dgl_graph
 
 
