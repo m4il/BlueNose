@@ -1,5 +1,6 @@
 from preprocess import get_data
 from tensorflow.keras.layers import Dense, Layer
+from periodictable import elements
 import tensorflow as tf
 import numpy as np
 import os
@@ -7,6 +8,9 @@ import pysmiles
 import networkx
 os.environ['DGLBACKEND'] = "tensorflow"
 import dgl
+
+
+
 
 
 class Model(tf.keras.Model):
@@ -148,11 +152,32 @@ class MPLayer(Layer):
         pass
 
 
+def pt_lookup(atoms):
+    """
+    Takes in a tensor of atoms in byte strings, and converts them to one hot
+    tensors corresponding to their atomic number.
+
+    :param atoms: a tensor of byte strings
+    :return: one hot vector of shape (num atoms, 119) corresponding to atomic numbers
+    """
+    periodic_table = {} # Need atomic number as feature instead of symbol.
+    for el in elements:
+        periodic_table[el.symbol] = el.number
+    elems = []
+    for atom in atoms.numpy():
+        # atom comes in as a byte string, so we decode
+        symbol = atom.decode("utf-8")
+        elems.append(periodic_table[str(atom)[2:-1]])
+
+    # convert to one hot
+    e_hot = tf.one_hot(elems, len(periodic_table))
+    return e_hot
+
 def build_graph(smiles):
     """
     Constructs a NetworkX graph out of a SMILES representation of a molecule from the train/test data.
     :param smiles: a string object of SMILES format
-    :return: nx.Graph
+    :return: nx.Graph:
         A graph describing a molecule. Nodes will have an 'element', 'aromatic'
         and a 'charge', and if `explicit_hydrogen` is False a 'hcount'.
         Depending on the input, they will also have 'isotope' and 'class'
@@ -166,42 +191,38 @@ def build_graph(smiles):
     Goal: save the node feats and edge feats of networkx as tensor and set them to dgl graph ndata and edata
     Question: Do we save ndata as ('C', 'C', 'C', 'O', 'C') or do we create one hot vectors like in the hw
     '''
-    # TODO: Initialize a DGL Graph
-    #print(smiles)
-    print("smilestring",smiles)
+    # read the smile graphs in using pysmiles & build network
     g = pysmiles.read_smiles(smiles)
 
-    #edge_att = g.get_edge_data()
+    # get the features from the graph and convert to tensor
     raw_node_feats = g.nodes(data='element')
-    print("raw_node_feats",raw_node_feats)
     na = np.array(list(raw_node_feats))
-    #print(na)
-    node_feats =tf.convert_to_tensor(na[:,1])
+    byte_node_feats = tf.convert_to_tensor(na[:,1])
+
+    # turn the byte string node feats into one_hot node feats
+    node_feats = pt_lookup(byte_node_feats)
     print("node_feats",node_feats)
 
-
-
+    # get edge data and extract bonds, then convert to tensor
     edata = g.edges(data='order')
     bonds = list(edata)
     na = np.array(bonds)
-
     t2 = tf.convert_to_tensor(na[:,2])
 
+    # build dgl graph
     dgl_graph = dgl.from_networkx(g)
+
+    # some fancy magic to set edata to the strength of bond
     edge_data = []
     dict = {frozenset((e1, e2)) : d for e1, e2, d in na}
     src, dest  = dgl_graph.edges()
     for e in zip(src.numpy(), dest.numpy()):
         edge_data.append(dict[frozenset(e)])
-
     edge_d_tensor = tf.convert_to_tensor(edge_data)
-    print("tensor", edge_d_tensor)
     dgl_graph.ndata['node_feats'] = node_feats
     dgl_graph.edata['edge_feats'] = edge_d_tensor
-    print(dgl_graph.edata['edge_feats'])
-    #print("graph edges", dgl_graph.edges())
 
-
+    # print(dgl_graph.edata['edge_feats'])
 
     return dgl_graph
 
@@ -258,8 +279,8 @@ def main():
     # TODO: Return the training and testing data from get_data
     # TODO: Instantiate model
     # TODO: Train and test for up to 15 epochs.
-    train_molecules, train_labels, test_molecules, vocab = get_data('.././data/test.csv', '.././data/train.csv', \
-     '.././data/vocab.txt')
+    train_molecules, train_labels, test_molecules, vocab = get_data('./data/test.csv', './data/train.csv', \
+     './data/vocab.txt')
 
     print(build_graph(train_molecules[0]))
 

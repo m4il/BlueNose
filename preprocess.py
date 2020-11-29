@@ -1,6 +1,5 @@
 import numpy as np
 import sys
-from random import seed, shuffle
 import csv
 
 def read_file(file_name):
