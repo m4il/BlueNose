@@ -30,6 +30,12 @@ class Model(tf.keras.Model):
         self.hidden_size = 300
         self.batch_size = 10
 
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+        self.liftLayer = tf.keras.layers.Dense(self.hidden_size)
+
+        self.mp = MPLayer(self.hidden_size,self.hidden_size)
+        self.mp1 = MPLayer(self.hidden_size,self.hidden_size)
+        self.mp2 = MPLayer(self.hidden_size,self.hidden_size)
 
 
     def call(self, g, is_testing=False):
@@ -43,8 +49,12 @@ class Model(tf.keras.Model):
         :param g: The DGL graph you wish to run inference on.
         :return: logits tensor of size (batch_size, 2)
         """
-        # TODO: Fill this in!
-        pass
+        g.ndata['node_feats'] = self.liftLayer(g.ndata['node_feats'])
+        self.mp.call(g)
+        self.mp1.call(g)
+        self.mp2.call(g)
+
+        return self.readout(g,g.ndata['node_feats'])
 
     def readout(self, g, node_feats):
         """
@@ -58,7 +68,9 @@ class Model(tf.keras.Model):
         """
         # TODO: Set the node features to be the output of your readout layer on
         # node_feats, then use dgl.sum_nodes to return logits.
-        pass
+        g.ndata['node_feats'] = self.readoutLayer(node_feats)
+
+        return dgl.sum_nodes(g,'node_feats')
 
     def accuracy_function(self, logits, labels):
         """
@@ -88,7 +100,11 @@ class MPLayer(Layer):
         :param out_feats: The size of vectors that you'd like to have at each of your
         nodes when you end message passing for this round.
         """
-        pass
+        self.in_feats = in_feats
+        self.out_feats = out_feats
+        self.messageLayer = tf.keras.layers.Dense(self.in_feats, activation = 'relu')
+        #self.reduceLayer = tf.keras.layers.Dense(self.in_feats, activation = 'relu')
+        self.outputLayer = tf.keras.layers.Dense(self.out_feats, activation = 'relu')
 
 
     def call(self, g, is_testing=False):
@@ -112,7 +128,15 @@ class MPLayer(Layer):
         :param is_testing: True if using custom send_and_recv, false if using DGL
         :return: None
         """
-        pass
+        # The message function for testing
+        messager = lambda x: self.message(x)
+        # The reduce function for testing
+        reducer = lambda x: self.reduce(x)
+        # TODO: Fill this in!
+
+
+        g.send_and_recv(g.edges(),messager,reducer)
+        g.ndata['node_feats'] = self.outputLayer(g.ndata['node_feats'])
 
     def message(self, edges, is_testing=False):
         """
@@ -132,7 +156,16 @@ class MPLayer(Layer):
         :return: A dictionary from some 'msg' to all the messages
         computed for each edge.
         """
-        pass
+        #one layer for node feature weights
+        #one later for edge feature weights
+        #messageLayer combination of these two layers
+        
+
+        #or:
+        #one layer -->  edge feature weight and node feature weights
+
+
+        return {'msg' : self.messageLayer(edges.src['node_feats'])}
 
     def reduce(self, nodes, is_testing=False):
         """
@@ -149,7 +182,7 @@ class MPLayer(Layer):
         :param is_testing: True if using custom send_and_recv, false if using DGL
         :return: A dictionary from 'node_feats' to the summed messages for each node.
         """
-        pass
+        return {'node_feats' : tf.math.reduce_sum(nodes.mailbox['msg'], axis=1)}
 
 
 def pt_lookup(atoms):
