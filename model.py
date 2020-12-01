@@ -159,7 +159,7 @@ class MPLayer(Layer):
         #one layer for node feature weights
         #one later for edge feature weights
         #messageLayer combination of these two layers
-        
+
 
         #or:
         #one layer -->  edge feature weight and node feature weights
@@ -252,8 +252,11 @@ def build_graph(smiles):
     for e in zip(src.numpy(), dest.numpy()):
         edge_data.append(dict[frozenset(e)])
     edge_d_tensor = tf.convert_to_tensor(edge_data)
+    #convert to one_hot tensor
+    edge_oh = tf.one_hot(edge_d_tensor, 4)
+    print(edge_oh)
     dgl_graph.ndata['node_feats'] = node_feats
-    dgl_graph.edata['edge_feats'] = edge_d_tensor
+    dgl_graph.edata['edge_feats'] = edge_oh
 
     # print(dgl_graph.edata['edge_feats'])
 
