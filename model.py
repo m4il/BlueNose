@@ -231,10 +231,9 @@ def build_graph(smiles):
     raw_node_feats = g.nodes(data='element')
     na = np.array(list(raw_node_feats))
     byte_node_feats = tf.convert_to_tensor(na[:,1])
-
     # turn the byte string node feats into one_hot node feats
     node_feats = pt_lookup(byte_node_feats)
-    print("node_feats",node_feats)
+    # print("node_feats",node_feats)
 
     # get edge data and extract bonds, then convert to tensor
     edata = g.edges(data='order')
@@ -254,11 +253,50 @@ def build_graph(smiles):
     edge_d_tensor = tf.convert_to_tensor(edge_data)
     #convert to one_hot tensor
     edge_oh = tf.one_hot(edge_d_tensor, 4)
-    print(edge_oh)
+
     dgl_graph.ndata['node_feats'] = node_feats
     dgl_graph.edata['edge_feats'] = edge_oh
 
-    # print(dgl_graph.edata['edge_feats'])
+
+
+    ############### relevant to message passing #############################
+
+    '''
+    The goal here is to construct a matrix that can be multiplied by our
+    "lookup" matrix in message passing. The end result is a vector of size
+    (num_nodes,)
+
+    '''
+
+
+    # src and dst nodes subgraphs
+    srcs = dgl_graph.subgraph(dgl_graph.edges()[0].numpy()).ndata['node_feats']
+    dsts = dgl_graph.subgraph(dgl_graph.edges()[1].numpy()).ndata['node_feats']
+    # based on this result, I believe that srcs and dsts are ordered how I want them
+    print(np.count_nonzero(srcs.numpy() == dsts.numpy()), np.shape(srcs.numpy()), 28*119)
+    # should correspond to the edges in the same ordering as our source nodes
+    e_idxs = tf.argmax(dgl_graph.edata['edge_feats'], axis=1)
+    s_idxs = tf.argmax(srcs, axis=1)
+    d_idxs = tf.argmax(dsts, axis=1)
+
+    # size: (num nodes, 114, 114, 4)
+    multi_hots = np.zeros((28, 114, 114, 4))
+
+    c = 0
+    # find a way to vectorize this
+    for s,d,b in zip(s_idxs, d_idxs, e_idxs):
+        multi_hots[c, s, d, b] = 1
+        c += 1
+
+    # this verifies we have it correct, we end up with 28 total nonzero indices,
+    # which is equal to the number of nodes
+    print(np.count_nonzero(multi_hots), np.nonzero(multi_hots))
+
+    var = tf.Variable(tf.random.normal([114, 114, 3], stddev=0.1))
+
+    res = tf.matmul(multi_hots, var)
+
+    print(np.count_nonzero(res))
 
     return dgl_graph
 
