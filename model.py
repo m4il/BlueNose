@@ -102,8 +102,12 @@ class MPLayer(Layer):
         """
         self.in_feats = in_feats
         self.out_feats = out_feats
+        self.num_atoms = 119
+        self.num_bonds = 4
+
+        self.bondLayer = tf.keras.layers.Dense(1, activation='relu')
+
         self.messageLayer = tf.keras.layers.Dense(self.in_feats, activation = 'relu')
-        #self.reduceLayer = tf.keras.layers.Dense(self.in_feats, activation = 'relu')
         self.outputLayer = tf.keras.layers.Dense(self.out_feats, activation = 'relu')
 
 
@@ -160,10 +164,27 @@ class MPLayer(Layer):
         #one later for edge feature weights
         #messageLayer combination of these two layers
 
+        srcs = edges.src['node_feats']
+        dsts = edges.dst['node_feats']
 
-        #or:
-        #one layer -->  edge feature weight and node feature weights
+        e_idxs = tf.argmax(edges.data['edge_feats'], axis=1)
+        s_idxs = tf.argmax(srcs, axis=1)
+        d_idxs = tf.argmax(dsts, axis=1)
 
+        # size: (num nodes, 114, 114, 4)
+        multi_hots = np.zeros((len(edges), self.num_atoms, self.num_atoms, self.num_bonds))
+
+        c = 0
+        # find a way to vectorize this
+        for s,d,b in zip(s_idxs, d_idxs, e_idxs):
+            multi_hots[c, s, d, b] = 1
+            c += 1
+
+        # this verifies we have it correct, we end up with 28 total nonzero indices,
+        # which is equal to the number of nodes
+        # print(np.count_nonzero(multi_hots), np.nonzero(multi_hots))
+
+        res = self.bondLayer(tf.reshape(multi_hots, (len(edges), self.num_bonds*self.num_atoms*self.num_atoms)))
 
         return {'msg' : self.messageLayer(edges.src['node_feats'])}
 
@@ -256,47 +277,6 @@ def build_graph(smiles):
 
     dgl_graph.ndata['node_feats'] = node_feats
     dgl_graph.edata['edge_feats'] = edge_oh
-
-
-
-    ############### relevant to message passing #############################
-
-    '''
-    The goal here is to construct a matrix that can be multiplied by our
-    "lookup" matrix in message passing. The end result is a vector of size
-    (num_nodes,)
-
-    '''
-
-
-    # src and dst nodes subgraphs
-    srcs = dgl_graph.subgraph(dgl_graph.edges()[0].numpy()).ndata['node_feats']
-    dsts = dgl_graph.subgraph(dgl_graph.edges()[1].numpy()).ndata['node_feats']
-    # based on this result, I believe that srcs and dsts are ordered how I want them
-    print(np.count_nonzero(srcs.numpy() == dsts.numpy()), np.shape(srcs.numpy()), 28*119)
-    # should correspond to the edges in the same ordering as our source nodes
-    e_idxs = tf.argmax(dgl_graph.edata['edge_feats'], axis=1)
-    s_idxs = tf.argmax(srcs, axis=1)
-    d_idxs = tf.argmax(dsts, axis=1)
-
-    # size: (num nodes, 114, 114, 4)
-    multi_hots = np.zeros((28, 114, 114, 4))
-
-    c = 0
-    # find a way to vectorize this
-    for s,d,b in zip(s_idxs, d_idxs, e_idxs):
-        multi_hots[c, s, d, b] = 1
-        c += 1
-
-    # this verifies we have it correct, we end up with 28 total nonzero indices,
-    # which is equal to the number of nodes
-    print(np.count_nonzero(multi_hots), np.nonzero(multi_hots))
-
-    var = tf.Variable(tf.random.normal([114, 114, 3], stddev=0.1))
-
-    res = tf.matmul(multi_hots, var)
-
-    print(np.count_nonzero(res))
 
     return dgl_graph
 
