@@ -16,7 +16,7 @@ import dgl
 class Model(tf.keras.Model):
     """Model class representing your MPNN."""
 
-    def __init__(self):
+    def __init__(self, vocab_size):
         """
         Instantiate a lifting layer, an optimizer, some number of MPLayers
         (we recommend 3), and a readout layer.
@@ -25,13 +25,14 @@ class Model(tf.keras.Model):
 
         # TODO: Initialize hyperparameters
         self.raw_features = 119
-        self.num_classes = 2
+        self.num_classes = vocab_size
         self.learning_rate = 1e-4
         self.hidden_size = 300
         self.batch_size = 10
 
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
         self.liftLayer = tf.keras.layers.Dense(self.hidden_size)
+        self.readoutLayer = tf.keras.layers.Dense(self.num_classes, activation='softmax')
 
         self.mp = MPLayer(self.hidden_size,self.hidden_size)
         self.mp1 = MPLayer(self.hidden_size,self.hidden_size)
@@ -53,8 +54,9 @@ class Model(tf.keras.Model):
         self.mp.call(g)
         self.mp1.call(g)
         self.mp2.call(g)
-
-        return self.readout(g,g.ndata['node_feats'])
+        probs = self.readout(g,g.ndata['node_feats'])
+        top_3 = tf.math.top_k(probs, k=3)
+        return top_3 # check whether loss function requires set/list..
 
     def readout(self, g, node_feats):
         """
@@ -64,7 +66,7 @@ class Model(tf.keras.Model):
         :param node_feats: The features at each node in the graph. Tensor of shape
                                    (num_atoms_in_batched_graph,
                                     size_of_node_vectors_from_prev_message_passing)
-        :return: logits tensor of size (batch_size, 2)
+        :return: logits tensor of size (batch_size, vocab_size)
         """
         # TODO: Set the node features to be the output of your readout layer on
         # node_feats, then use dgl.sum_nodes to return logits.
@@ -81,6 +83,25 @@ class Model(tf.keras.Model):
         :return: mean accuracy over batch.
         """
         pass
+
+    def loss_function(self, y_pred, y_true, smooth=100):
+        """
+        Jaccard = (|X & Y|)/ (|X|+ |Y| - |X & Y|)
+                = sum(|A*B|)/(sum(|A|)+sum(|B|)-sum(|A*B|))
+
+        The jaccard distance loss is usefull for unbalanced datasets. This has been
+        shifted so it converges on 0 and is smoothed to avoid exploding or disapearing
+        gradient.
+
+        Ref: https://en.wikipedia.org/wiki/Jaccard_index
+
+        @url: https://gist.github.com/wassname/f1452b748efcbeb4cb9b1d059dce6f96
+        @author: wassname
+        """
+        intersection = tf.keras.sum(tf.keras.abs(y_true * y_pred), axis=-1)
+        sum_ = tf.keras.sum(tf.keras.abs(y_true) + tf.keras.abs(y_pred), axis=-1)
+        jac = (intersection + smooth) / (sum_ - intersection + smooth)
+        return (1 - jac) * smooth
 
 
 class MPLayer(Layer):
@@ -186,7 +207,10 @@ class MPLayer(Layer):
 
         res = self.bondLayer(tf.reshape(multi_hots, (len(edges), self.num_bonds*self.num_atoms*self.num_atoms)))
 
-        return {'msg' : self.messageLayer(edges.src['node_feats'])}
+        # broadcast the num_edges x 1 bond representation to representation of node features
+        out = tf.math.multiply(res, self.messageLayer(edges.src['node_feats']))
+
+        return {'msg' : out}
 
     def reduce(self, nodes, is_testing=False):
         """
@@ -300,7 +324,28 @@ def train(model, train_data):
     """
     # This is the loss function, usage: loss(labels, logits)
     # TODO: Implement train with the docstring instructions
+    max_divisor = len(train_data) - (len(train_data) % model.batch_size)
 
+    for k in range(0, max_divisor, model.batch_size):
+        batch_inputs = train_data[k:(k+model.batch_size)]
+        batch_labels = train_labels[k:(k+model.batch_size)]
+
+        graphs = []
+        labels = []
+
+        for m in batch_inputs:
+            graphs.append(build_graph(m))
+            labels.append(m.label)
+
+        g_batched = dgl.batch(graphs)
+
+        with tf.GradientTape() as tape:
+            logits = model(g_batched, False)
+            losses = model.loss_function(batch_labels, logits)
+
+
+        gradients = tape.gradient(losses, model.trainable_variables)
+        model.opt.apply_gradients(zip(gradients, model.trainable_variables))
     pass
 
 
@@ -336,7 +381,9 @@ def main():
     train_molecules, train_labels, test_molecules, vocab = get_data('./data/test.csv', './data/train.csv', \
      './data/vocab.txt')
 
-    print(build_graph(train_molecules[0]))
+    g = build_graph(train_molecules[0])
+    l = MPLayer(10, 10)
+    l.call(g)
 
 
 
