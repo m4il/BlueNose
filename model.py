@@ -13,6 +13,7 @@ import dgl
 
 
 
+
 class Model(tf.keras.Model):
     """Model class representing your MPNN."""
 
@@ -30,7 +31,7 @@ class Model(tf.keras.Model):
         self.hidden_size = 300
         self.batch_size = 10
 
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
+        self.opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
         self.liftLayer = tf.keras.layers.Dense(self.hidden_size)
         self.readoutLayer = tf.keras.layers.Dense(self.num_classes, activation='softmax')
 
@@ -39,7 +40,7 @@ class Model(tf.keras.Model):
         self.mp2 = MPLayer(self.hidden_size,self.hidden_size)
 
 
-    def call(self, g, is_testing=False):
+    def call(self, g):
         """
         Computes the forward pass of your network.
         1) Lift the features of the batched graph passed in. Don't apply an activation function.
@@ -98,8 +99,8 @@ class Model(tf.keras.Model):
         @url: https://gist.github.com/wassname/f1452b748efcbeb4cb9b1d059dce6f96
         @author: wassname
         """
-        intersection = tf.keras.sum(tf.keras.abs(y_true * y_pred), axis=-1)
-        sum_ = tf.keras.sum(tf.keras.abs(y_true) + tf.keras.abs(y_pred), axis=-1)
+        intersection = tf.keras.backend.sum(tf.keras.backend.abs(y_true * y_pred), axis=-1)
+        sum_ = tf.keras.backend.sum(tf.keras.backend.abs(y_true) + tf.keras.backend.abs(y_pred), axis=-1)
         jac = (intersection + smooth) / (sum_ - intersection + smooth)
         return (1 - jac) * smooth
 
@@ -121,18 +122,17 @@ class MPLayer(Layer):
         :param out_feats: The size of vectors that you'd like to have at each of your
         nodes when you end message passing for this round.
         """
-        self.in_feats = in_feats
-        self.out_feats = out_feats
+        super(MPLayer, self).__init__()
+
         self.num_atoms = 119
-        self.num_bonds = 4
+        self.num_bonds = 5
 
         self.bondLayer = tf.keras.layers.Dense(1, activation='relu')
+        self.messageLayer = tf.keras.layers.Dense(in_feats, activation = 'relu')
+        self.outputLayer = tf.keras.layers.Dense(out_feats, activation = 'relu')
 
-        self.messageLayer = tf.keras.layers.Dense(self.in_feats, activation = 'relu')
-        self.outputLayer = tf.keras.layers.Dense(self.out_feats, activation = 'relu')
 
-
-    def call(self, g, is_testing=False):
+    def call(self, g):
         """
         Computes the forward pass of your MPNN layer
         1) Call the either DGL's send and receive function or your own,
@@ -159,11 +159,13 @@ class MPLayer(Layer):
         reducer = lambda x: self.reduce(x)
         # TODO: Fill this in!
 
-
         g.send_and_recv(g.edges(),messager,reducer)
         g.ndata['node_feats'] = self.outputLayer(g.ndata['node_feats'])
 
-    def message(self, edges, is_testing=False):
+        return None
+
+
+    def message(self, edges):
         """
         This function, when called on a group of edges, should compute a message
         for each edge to be sent from the edge's src node to its dst node.
@@ -185,14 +187,14 @@ class MPLayer(Layer):
         #one later for edge feature weights
         #messageLayer combination of these two layers
 
-        srcs = edges.src['node_feats']
-        dsts = edges.dst['node_feats']
+        srcs = edges.src['atomic_number']
+        dsts = edges.dst['atomic_number']
 
         e_idxs = tf.argmax(edges.data['edge_feats'], axis=1)
         s_idxs = tf.argmax(srcs, axis=1)
         d_idxs = tf.argmax(dsts, axis=1)
 
-        # size: (num nodes, 114, 114, 4)
+        # size: (num nodes, 114, 114, 5)
         multi_hots = np.zeros((len(edges), self.num_atoms, self.num_atoms, self.num_bonds))
 
         c = 0
@@ -294,18 +296,23 @@ def build_graph(smiles):
     dict = {frozenset((e1, e2)) : d for e1, e2, d in na}
     src, dest  = dgl_graph.edges()
     for e in zip(src.numpy(), dest.numpy()):
-        edge_data.append(dict[frozenset(e)])
+        bond = dict[frozenset(e)]
+        if bond == 1.5:
+            bond = 5
+        edge_data.append(int(bond))
     edge_d_tensor = tf.convert_to_tensor(edge_data)
     #convert to one_hot tensor
-    edge_oh = tf.one_hot(edge_d_tensor, 4)
+
+    edge_oh = tf.one_hot(edge_d_tensor, 5)
 
     dgl_graph.ndata['node_feats'] = node_feats
+    dgl_graph.ndata['atomic_number'] = node_feats
     dgl_graph.edata['edge_feats'] = edge_oh
 
     return dgl_graph
 
 
-def train(model, train_data):
+def train(model, train_data, train_labels):
     """
     Trains your model given the training data.
     For each batch of molecules in train data...
@@ -328,28 +335,21 @@ def train(model, train_data):
 
     for k in range(0, max_divisor, model.batch_size):
         batch_inputs = train_data[k:(k+model.batch_size)]
-        batch_labels = train_labels[k:(k+model.batch_size)]
-
+        labels = tf.convert_to_tensor(train_labels[k:(k+model.batch_size)])
         graphs = []
-        labels = []
 
         for m in batch_inputs:
             graphs.append(build_graph(m))
-            labels.append(m.label)
 
         g_batched = dgl.batch(graphs)
 
         with tf.GradientTape() as tape:
-            logits = model(g_batched, False)
-            losses = model.loss_function(batch_labels, logits)
+            logits = model.call(g_batched)
+            losses = model.loss_function(logits[1], labels)
 
-
+        print(model.trainable_variables)
         gradients = tape.gradient(losses, model.trainable_variables)
         model.opt.apply_gradients(zip(gradients, model.trainable_variables))
-    pass
-
-
-
 
 def test(model, test_data):
     """
@@ -381,10 +381,15 @@ def main():
     train_mols, train_labs, valid_mols, valid_labs, test_mols, vocab = get_data('./data/test.csv', './data/train.csv', \
      './data/vocab.txt')
 
-    g = build_graph(train_mols[0])
-    l = MPLayer(10, 10)
-    l.call(g)
+    train_m = []
+    train_l = []
+    for mol, lab in zip(train_mols, train_labs):
+        if len(lab) == 3:
+            train_m.append(mol)
+            train_l.append(lab)
 
+    m = Model(len(vocab))
+    train(m, train_m, train_l)
 
 
 if __name__ == '__main__':
