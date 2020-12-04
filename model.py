@@ -378,10 +378,10 @@ def main():
     # TODO: Return the training and testing data from get_data
     # TODO: Instantiate model
     # TODO: Train and test for up to 15 epochs.
-    train_molecules, train_labels, test_molecules, vocab = get_data('./data/test.csv', './data/train.csv', \
+    train_mols, train_labs, valid_mols, valid_labs, test_mols, vocab = get_data('./data/test.csv', './data/train.csv', \
      './data/vocab.txt')
 
-    g = build_graph(train_molecules[0])
+    g = build_graph(train_mols[0])
     l = MPLayer(10, 10)
     l.call(g)
 
