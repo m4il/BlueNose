@@ -8,6 +8,8 @@ import pysmiles
 import networkx
 os.environ['DGLBACKEND'] = "tensorflow"
 import dgl
+import numpy as np
+import matplotlib.pyplot as plt
 
 
 
@@ -33,7 +35,8 @@ class Model(tf.keras.Model):
 
         self.opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
         self.liftLayer = tf.keras.layers.Dense(self.hidden_size)
-        self.readoutLayer = tf.keras.layers.Dense(self.num_classes, activation='softmax')
+        # self.readoutLayer = tf.keras.layers.Dense(self.num_classes, activation='sigmoid')
+        self.readoutLayer = tf.keras.layers.Dense(self.num_classes)
 
         self.mp = MPLayer(self.hidden_size,self.hidden_size)
         self.mp1 = MPLayer(self.hidden_size,self.hidden_size)
@@ -55,9 +58,9 @@ class Model(tf.keras.Model):
         self.mp.call(g)
         self.mp1.call(g)
         self.mp2.call(g)
-        probs = self.readout(g,g.ndata['node_feats'])
-        top_3 = tf.math.top_k(probs, k=3)
-        return top_3 # check whether loss function requires set/list..
+        logits = self.readout(g,g.ndata['node_feats'])
+        # top_3 = tf.math.top_k(logits, k=3)
+        return logits # check whether loss function requires set/list..
 
     def readout(self, g, node_feats):
         """
@@ -332,7 +335,7 @@ def train(model, train_data, train_labels):
     # This is the loss function, usage: loss(labels, logits)
     # TODO: Implement train with the docstring instructions
     max_divisor = len(train_data) - (len(train_data) % model.batch_size)
-
+    l = []
     for k in range(0, max_divisor, model.batch_size):
         batch_inputs = train_data[k:(k+model.batch_size)]
         labels = tf.convert_to_tensor(train_labels[k:(k+model.batch_size)])
@@ -342,14 +345,18 @@ def train(model, train_data, train_labels):
             graphs.append(build_graph(m))
 
         g_batched = dgl.batch(graphs)
-
         with tf.GradientTape() as tape:
             logits = model.call(g_batched)
-            losses = model.loss_function(logits[1], labels)
-
-        print(model.trainable_variables)
+            # print(logits)
+            # logits = tf.dtypes.cast(logits[0], tf.int32)
+            # losses = model.loss_function(logits, labels)
+            losses = tf.math.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels, logits))
+        l.append(losses)
+        # print(model.trainable_variables)
         gradients = tape.gradient(losses, model.trainable_variables)
         model.opt.apply_gradients(zip(gradients, model.trainable_variables))
+
+    return l
 
 def test(model, test_data):
     """
@@ -374,6 +381,15 @@ def test(model, test_data):
     logits = model.call(g_batched, True)
     return model.accuracy_function(logits, labels)
 
+def visualize_loss(loss):
+    x = np.arange(1, len(loss))
+    y = loss
+    plt.title("Losses")
+    plt.xlabel("Example")
+    plt.ylabel("Loss")
+    plt.plot(x, y, color ="red")
+    plt.show()
+
 def main():
     # TODO: Return the training and testing data from get_data
     # TODO: Instantiate model
@@ -384,13 +400,12 @@ def main():
     train_m = []
     train_l = []
     for mol, lab in zip(train_mols, train_labs):
-        if len(lab) == 3:
+        if tf.math.reduce_sum(lab) == 3:
             train_m.append(mol)
             train_l.append(lab)
-
     m = Model(len(vocab))
-    train(m, train_m, train_l)
-
+    loss = train(m, train_m, tf.convert_to_tensor(train_l, dtype=tf.float32))
+    visualize_loss(loss)
 
 if __name__ == '__main__':
     main()

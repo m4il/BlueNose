@@ -60,13 +60,12 @@ def encode(labels, vocab):
         idx_labels.append(indices)
     idx_labels = np.array(idx_labels)
 
-    # # construct an array of 0s to use as multi-hot vectors
-    # z = np.zeros((len(labels), len(vocab)))
-    # for i in range(len(idx_labels)):
-    #     for l in range(len(idx_labels[i])):
-    #         z[i, idx_labels[i][l]] = 1
-
-    return idx_labels
+    # construct an array of 0s to use as multi-hot vectors
+    z = np.zeros((len(labels), len(vocab)))
+    for i in range(len(idx_labels)):
+        for l in range(len(idx_labels[i])):
+            z[i, idx_labels[i][l]] = 1
+    return z
 
 def get_data(test_file, train_file, vocab_file, num_scents=3):
     """
@@ -104,7 +103,7 @@ def get_data(test_file, train_file, vocab_file, num_scents=3):
 
     # get multi hot vectors from the testing data
     train_labels = encode(train_labels, vocab)
-    print(train_labels)
+    # print(train_labels)
 
 
     # split into training and validation sets
@@ -115,7 +114,7 @@ def get_data(test_file, train_file, vocab_file, num_scents=3):
 
     train_labels = train_labels[:split_idx]
     valid_labels = train_labels[split_idx:]
-
+    # print(np.shape(train_labels))
     # print(np.shape(train_molecules), np.shape(train_labels), np.shape(test_molecules))
     return train_molecules, train_labels, valid_molecules, valid_labels, test_molecules, vocab
 
