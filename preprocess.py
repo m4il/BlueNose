@@ -23,9 +23,9 @@ def read_file(file_name):
             strs = row[0].split(',', 1)
             # avoid garbage
             if strs != ['']:
-                molecules.append(strs[0])
                 # deal with labels
-                if len(strs) > 1:
+                if len(strs) > 1 and strs[0] != None:
+                    molecules.append(strs[0])
                     # replace redundant string quotes
                     strs[1] = strs[1].replace('"', '')
                     labels.append(strs[1])
@@ -54,10 +54,17 @@ def encode(labels, vocab):
         # for each label, ie: ['lavendar,floral,earthy']
         indices = []
         scents = l.split(',') # split string
-        for s in scents:
-            # get the index of each individual scent
-            indices.append(vocab[s])
+
+        ################## to include all scents #################
+        # for s in scents:
+        #     # get the index of each individual scent
+        #     indices.append(vocab[s])
+
+        ################## to include only first scent #################
+        indices.append(vocab[scents[0]])
+        ##################          end             #################
         idx_labels.append(indices)
+
     idx_labels = np.array(idx_labels)
 
     # construct an array of 0s to use as multi-hot vectors
@@ -109,11 +116,11 @@ def get_data(test_file, train_file, vocab_file, num_scents=3):
     # split into training and validation sets
     split_idx = round(len(train_labels) * 0.9)
 
-    train_molecules = train_molecules[:split_idx]
     valid_molecules = train_molecules[split_idx:]
+    train_molecules = train_molecules[:split_idx]
 
-    train_labels = train_labels[:split_idx]
     valid_labels = train_labels[split_idx:]
+    train_labels = train_labels[:split_idx]
     # print(np.shape(train_labels))
     # print(np.shape(train_molecules), np.shape(train_labels), np.shape(test_molecules))
     return train_molecules, train_labels, valid_molecules, valid_labels, test_molecules, vocab

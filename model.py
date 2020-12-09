@@ -10,11 +10,10 @@ os.environ['DGLBACKEND'] = "tensorflow"
 import dgl
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
 
-
-
-
-
+import logging
+logging.getLogger('pysmiles').setLevel(logging.CRITICAL)  # Anything higher than warning
 
 class Model(tf.keras.Model):
     """Model class representing your MPNN."""
@@ -29,7 +28,7 @@ class Model(tf.keras.Model):
         # TODO: Initialize hyperparameters
         self.raw_features = 119
         self.num_classes = vocab_size
-        self.learning_rate = 1e-4
+        self.learning_rate = 3e-4
         self.hidden_size = 300
         self.batch_size = 10
 
@@ -86,7 +85,21 @@ class Model(tf.keras.Model):
             (1 for if the molecule is active against cancer, else 0).
         :return: mean accuracy over batch.
         """
-        pass
+
+        total = tf.math.reduce_sum(labels)
+
+        # get the indices of the top 3 predictions
+        idx_preds = tf.math.top_k(logits)[1]
+        idx_labels = tf.math.top_k(labels)[1]
+
+        # compare correct
+        correct = tf.math.equal(idx_preds, idx_labels)
+        # count correct
+        total_correct = tf.cast(tf.math.count_nonzero(correct), tf.float32)
+
+        print(total_correct)
+
+        return tf.math.divide(total_correct, total)
 
     def loss_function(self, y_pred, y_true, smooth=100):
         """
@@ -189,32 +202,32 @@ class MPLayer(Layer):
         #one layer for node feature weights
         #one later for edge feature weights
         #messageLayer combination of these two layers
-
-        srcs = edges.src['atomic_number']
-        dsts = edges.dst['atomic_number']
-
-        e_idxs = tf.argmax(edges.data['edge_feats'], axis=1)
-        s_idxs = tf.argmax(srcs, axis=1)
-        d_idxs = tf.argmax(dsts, axis=1)
-
-        # size: (num nodes, 114, 114, 5)
-        multi_hots = np.zeros((len(edges), self.num_atoms, self.num_atoms, self.num_bonds))
-
-        c = 0
-        # find a way to vectorize this
-        for s,d,b in zip(s_idxs, d_idxs, e_idxs):
-            multi_hots[c, s, d, b] = 1
-            c += 1
-
-        # this verifies we have it correct, we end up with 28 total nonzero indices,
-        # which is equal to the number of nodes
-        # print(np.count_nonzero(multi_hots), np.nonzero(multi_hots))
-
-        res = self.bondLayer(tf.reshape(multi_hots, (len(edges), self.num_bonds*self.num_atoms*self.num_atoms)))
-
-        # broadcast the num_edges x 1 bond representation to representation of node features
-        out = tf.math.multiply(res, self.messageLayer(edges.src['node_feats']))
-
+        #
+        # srcs = edges.src['atomic_number']
+        # dsts = edges.dst['atomic_number']
+        #
+        # e_idxs = tf.argmax(edges.data['edge_feats'], axis=1)
+        # s_idxs = tf.argmax(srcs, axis=1)
+        # d_idxs = tf.argmax(dsts, axis=1)
+        #
+        # # size: (num nodes, 114, 114, 5)
+        # multi_hots = np.zeros((len(edges), self.num_atoms, self.num_atoms, self.num_bonds))
+        #
+        # c = 0
+        # # find a way to vectorize this
+        # for s,d,b in zip(s_idxs, d_idxs, e_idxs):
+        #     multi_hots[c, s, d, b] = 1
+        #     c += 1
+        #
+        # # this verifies we have it correct, we end up with 28 total nonzero indices,
+        # # which is equal to the number of nodes
+        # # print(np.count_nonzero(multi_hots), np.nonzero(multi_hots))
+        #
+        # res = self.bondLayer(tf.reshape(multi_hots, (len(edges), self.num_bonds*self.num_atoms*self.num_atoms)))
+        #
+        # # broadcast the num_edges x 1 bond representation to representation of node features
+        # out = tf.math.multiply(res, self.messageLayer(edges.src['node_feats']))
+        out = self.messageLayer(edges.src['node_feats'])
         return {'msg' : out}
 
     def reduce(self, nodes, is_testing=False):
@@ -350,7 +363,7 @@ def train(model, train_data, train_labels):
             # print(logits)
             # logits = tf.dtypes.cast(logits[0], tf.int32)
             # losses = model.loss_function(logits, labels)
-            losses = tf.math.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels, logits))
+            losses = tf.math.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels, logits))
         l.append(losses)
         # print(model.trainable_variables)
         gradients = tape.gradient(losses, model.trainable_variables)
@@ -358,7 +371,7 @@ def train(model, train_data, train_labels):
 
     return l
 
-def test(model, test_data):
+def test(model, test_data, test_labels):
     """
     Testing function for our model.
     Batch the molecules in test_data, feed them into your model as described in train.
@@ -369,20 +382,26 @@ def test(model, test_data):
     testing set from get_data.
     :return: total accuracy over the test set (between 0 and 1)
     """
-    # TODO: Fill this in!
-    graphs = []
-    labels = []
-    for m in test_data:
-        graphs.append(build_graph(m))
-        labels.append(m.label)
 
-    labels = tf.convert_to_tensor(labels)
-    g_batched = dgl.batch(graphs)
-    logits = model.call(g_batched, True)
-    return model.accuracy_function(logits, labels)
+    max_divisor = len(test_data) - (len(test_data) % model.batch_size)
+    print(len(test_data))
+    acc = []
+    for k in range(0, max_divisor, model.batch_size):
+        batch_inputs = test_data[k:(k+model.batch_size)]
+        labels = tf.convert_to_tensor(test_labels[k:(k+model.batch_size)])
+        graphs = []
+
+        for m in batch_inputs:
+            graphs.append(build_graph(m))
+
+        g_batched = dgl.batch(graphs)
+        logits = model.call(g_batched)
+        acc.append(model.accuracy_function(logits, labels))
+
+    return tf.math.reduce_mean(acc)
 
 def visualize_loss(loss):
-    x = np.arange(1, len(loss))
+    x = np.arange(0, len(loss))
     y = loss
     plt.title("Losses")
     plt.xlabel("Example")
@@ -397,15 +416,31 @@ def main():
     train_mols, train_labs, valid_mols, valid_labs, test_mols, vocab = get_data('./data/test.csv', './data/train.csv', \
      './data/vocab.txt')
 
-    train_m = []
-    train_l = []
-    for mol, lab in zip(train_mols, train_labs):
-        if tf.math.reduce_sum(lab) == 3:
-            train_m.append(mol)
-            train_l.append(lab)
+    # train_m = []
+    # train_l = []
+    # for mol, lab in zip(train_mols, train_labs):
+    #     if tf.math.reduce_sum(lab) == 3:
+    #         train_m.append(mol)
+    #         train_l.append(lab)
+    #
+    # test_m = []
+    # test_l = []
+    # for mol, lab in zip(valid_mols, valid_labs):
+    #     if tf.math.reduce_sum(lab) == 3:
+    #         acc2 += 1
+    #         test_m.append(mol)
+    #         test_l.append(lab)
+    t_loss = []
     m = Model(len(vocab))
-    loss = train(m, train_m, tf.convert_to_tensor(train_l, dtype=tf.float32))
+    for i in range(10):
+        print("training...", i)
+        loss = train(m, train_mols, tf.convert_to_tensor(train_labs, dtype=tf.float32))
+        t_loss = t_loss + list(loss)
+        print("testing...", i)
+        acc = test(m, valid_mols, tf.convert_to_tensor(valid_labs, dtype=tf.float32))
+        print("testing accuracy:", acc)
     visualize_loss(loss)
+
 
 if __name__ == '__main__':
     main()
