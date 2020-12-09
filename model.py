@@ -77,31 +77,31 @@ class Model(tf.keras.Model):
 
         return dgl.sum_nodes(g,'node_feats')
 
-    def accuracy_function(self, logits, labels):
-        """
-        Computes the accuracy across a batch of logits and labels.
-        :param logits: a 2-D np array of size (batch_size, 2)
-        :param labels: a 1-D np array of size (batch_size)
-            (1 for if the molecule is active against cancer, else 0).
-        :return: mean accuracy over batch.
-        """
+    # def accuracy_function(self, logits, labels):
+    #     """
+    #     Computes the accuracy across a batch of logits and labels.
+    #     :param logits: a 2-D np array of size (batch_size, 2)
+    #     :param labels: a 1-D np array of size (batch_size)
+    #         (1 for if the molecule is active against cancer, else 0).
+    #     :return: mean accuracy over batch.
+    #     """
+    #
+    #     total = tf.math.reduce_sum(labels)
+    #
+    #     # get the indices of the top 3 predictions
+    #     idx_preds = tf.math.top_k(logits)[1]
+    #     idx_labels = tf.math.top_k(labels)[1]
+    #
+    #     # compare correct
+    #     correct = tf.math.equal(idx_preds, idx_labels)
+    #     # count correct
+    #     total_correct = tf.cast(tf.math.count_nonzero(correct), tf.float32)
+    #
+    #     print(total_correct)
+    #
+    #     return tf.math.divide(total_correct, total)
 
-        total = tf.math.reduce_sum(labels)
-
-        # get the indices of the top 3 predictions
-        idx_preds = tf.math.top_k(logits)[1]
-        idx_labels = tf.math.top_k(labels)[1]
-
-        # compare correct
-        correct = tf.math.equal(idx_preds, idx_labels)
-        # count correct
-        total_correct = tf.cast(tf.math.count_nonzero(correct), tf.float32)
-
-        print(total_correct)
-
-        return tf.math.divide(total_correct, total)
-
-    def loss_function(self, y_pred, y_true, smooth=100):
+    def accuracy_function(self, y_pred, y_true, smooth=100):
         """
         Jaccard = (|X & Y|)/ (|X|+ |Y| - |X & Y|)
                 = sum(|A*B|)/(sum(|A|)+sum(|B|)-sum(|A*B|))
@@ -115,10 +115,24 @@ class Model(tf.keras.Model):
         @url: https://gist.github.com/wassname/f1452b748efcbeb4cb9b1d059dce6f96
         @author: wassname
         """
-        intersection = tf.keras.backend.sum(tf.keras.backend.abs(y_true * y_pred), axis=-1)
-        sum_ = tf.keras.backend.sum(tf.keras.backend.abs(y_true) + tf.keras.backend.abs(y_pred), axis=-1)
-        jac = (intersection + smooth) / (sum_ - intersection + smooth)
-        return (1 - jac) * smooth
+        acc = 0
+        for pred, label in zip(y_pred, y_true):
+            intersection = 0
+            union = tf.math.count_nonzero(label)*2
+            idx = tf.math.top_k(pred, tf.cast(tf.math.count_nonzero(label), tf.int32))[1]
+            for i in idx:
+                if label[i] == 1:
+                    intersection += 1
+            union -= intersection
+            acc += intersection/union
+        acc /= len(y_pred)
+        return acc
+
+
+        # intersection = tf.keras.backend.sum(tf.keras.backend.abs(y_true * y_pred), axis=-1)
+        # sum_ = tf.keras.backend.sum(tf.keras.backend.abs(y_true) + tf.keras.backend.abs(y_pred), axis=-1)
+        # jac = (intersection + smooth) / (sum_ - intersection + smooth)
+        # return (1 - jac) * smooth
 
 
 class MPLayer(Layer):
@@ -199,10 +213,10 @@ class MPLayer(Layer):
         :return: A dictionary from some 'msg' to all the messages
         computed for each edge.
         """
-        #one layer for node feature weights
-        #one later for edge feature weights
-        #messageLayer combination of these two layers
-        #
+        # one layer for node feature weights
+        # one later for edge feature weights
+        # messageLayer combination of these two layers
+
         # srcs = edges.src['atomic_number']
         # dsts = edges.dst['atomic_number']
         #
@@ -363,7 +377,7 @@ def train(model, train_data, train_labels):
             # print(logits)
             # logits = tf.dtypes.cast(logits[0], tf.int32)
             # losses = model.loss_function(logits, labels)
-            losses = tf.math.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels, logits))
+            losses = tf.math.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels, logits))
         l.append(losses)
         # print(model.trainable_variables)
         gradients = tape.gradient(losses, model.trainable_variables)
@@ -384,7 +398,6 @@ def test(model, test_data, test_labels):
     """
 
     max_divisor = len(test_data) - (len(test_data) % model.batch_size)
-    print(len(test_data))
     acc = []
     for k in range(0, max_divisor, model.batch_size):
         batch_inputs = test_data[k:(k+model.batch_size)]
@@ -432,7 +445,7 @@ def main():
     #         test_l.append(lab)
     t_loss = []
     m = Model(len(vocab))
-    for i in range(10):
+    for i in range(1):
         print("training...", i)
         loss = train(m, train_mols, tf.convert_to_tensor(train_labs, dtype=tf.float32))
         t_loss = t_loss + list(loss)

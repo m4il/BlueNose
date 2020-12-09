@@ -56,12 +56,12 @@ def encode(labels, vocab):
         scents = l.split(',') # split string
 
         ################## to include all scents #################
-        # for s in scents:
-        #     # get the index of each individual scent
-        #     indices.append(vocab[s])
+        for s in scents:
+            # get the index of each individual scent
+            indices.append(vocab[s])
 
         ################## to include only first scent #################
-        indices.append(vocab[scents[0]])
+        # indices.append(vocab[scents[0]])
         ##################          end             #################
         idx_labels.append(indices)
 
