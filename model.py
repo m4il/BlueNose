@@ -11,6 +11,7 @@ import dgl
 import numpy as np
 import matplotlib.pyplot as plt
 import sys
+import tensorflow.keras.backend as K
 
 import logging
 logging.getLogger('pysmiles').setLevel(logging.CRITICAL)  # Anything higher than warning
@@ -128,11 +129,12 @@ class Model(tf.keras.Model):
         acc /= len(y_pred)
         return acc
 
+    def loss_function(logits, labels):
+         intersection = K.sum(K.abs(y_true * y_pred), axis=-1)
+         sum_ = K.sum(K.abs(y_true) + K.abs(y_pred), axis=-1)
+         jac = (intersection + smooth) / (sum_ - intersection + smooth)
+         return (1 - jac) * smooth
 
-        # intersection = tf.keras.backend.sum(tf.keras.backend.abs(y_true * y_pred), axis=-1)
-        # sum_ = tf.keras.backend.sum(tf.keras.backend.abs(y_true) + tf.keras.backend.abs(y_pred), axis=-1)
-        # jac = (intersection + smooth) / (sum_ - intersection + smooth)
-        # return (1 - jac) * smooth
 
 
 class MPLayer(Layer):
@@ -376,8 +378,8 @@ def train(model, train_data, train_labels):
             logits = model.call(g_batched)
             # print(logits)
             # logits = tf.dtypes.cast(logits[0], tf.int32)
-            # losses = model.loss_function(logits, labels)
-            losses = tf.math.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels, logits))
+            losses = model.loss_function(logits, labels)
+            #losses = tf.math.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels, logits))
         l.append(losses)
         # print(model.trainable_variables)
         gradients = tape.gradient(losses, model.trainable_variables)
