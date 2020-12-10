@@ -28,10 +28,10 @@ class Model(tf.keras.Model):
 
         # TODO: Initialize hyperparameters
         self.num_classes = vocab_size
-        self.learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=1e-4, decay_steps=200, decay_rate=0.95, staircase=True)
-        # self.learning_rate = 1e-4
+        # self.learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=1e-4, decay_steps=200, decay_rate=0.95, staircase=True)
+        self.learning_rate = 3e-4
         self.hidden_size = 300
-        self.batch_size = 50
+        self.batch_size = 100
 
         self.opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
         self.liftLayer = tf.keras.layers.Dense(self.hidden_size)
@@ -87,29 +87,6 @@ class Model(tf.keras.Model):
 
         return dgl.sum_nodes(g,'node_feats')
 
-    # def accuracy_function(self, logits, labels):
-    #     """
-    #     Computes the accuracy across a batch of logits and labels.
-    #     :param logits: a 2-D np array of size (batch_size, 2)
-    #     :param labels: a 1-D np array of size (batch_size)
-    #         (1 for if the molecule is active against cancer, else 0).
-    #     :return: mean accuracy over batch.
-    #     """
-    #
-    #     total = tf.math.reduce_sum(labels)
-    #
-    #     # get the indices of the top 3 predictions
-    #     idx_preds = tf.math.top_k(logits)[1]
-    #     idx_labels = tf.math.top_k(labels)[1]
-    #
-    #     # compare correct
-    #     correct = tf.math.equal(idx_preds, idx_labels)
-    #     # count correct
-    #     total_correct = tf.cast(tf.math.count_nonzero(correct), tf.float32)
-    #
-    #     print(total_correct)
-    #
-    #     return tf.math.divide(total_correct, total)
 
     def recall_function(self, logits, labels):
         t_rec = 0
@@ -148,6 +125,34 @@ class Model(tf.keras.Model):
             acc += intersection/union
         acc /= self.batch_size
         return acc
+
+
+    def loss_function(self, logits, labels, smooth=100):
+        prbs = tf.math.sigmoid(logits)
+        for pred, label in zip(prbs, labels):
+            intersection = 0
+            sum_ = 0
+            vals, idxs = tf.math.top_k(pred, tf.cast(tf.math.count_nonzero(label), tf.int32))
+            for i,v in zip(idxs, vals):
+                sum_ += (label[i] + tf.math.abs(v))
+                intersection += tf.math.abs(label[i] * v)
+            jac = (intersection + smooth) / (sum_ - intersection + smooth)
+            res = (1-jac)*smooth
+        return res
+
+        # vals, idxs = tf.math.top_k(prbs, 5) #arbitrarily snag the top 5
+        # preds = np.zeros((self.batch_size, self.num_classes))
+        # for i in range(len(idxs)): # set each of the 5 options for each row = 1
+        #     preds[i, idxs[i]] = 1
+        # intersection = tf.math.reduce_sum(tf.math.multiply(labels, preds))
+        # sum_ = tf.math.reduce_sum(labels + preds)
+        # jac = (intersection + smooth) / (sum_ - intersection + smooth)
+        # # for pred, label in zip(prbs, labels):
+        # #     vals, idxs = tf.math.top_k(pred, tf.cast(tf.math.count_nonzero(label), tf.int32))
+        # #     vals_l, idxs_l = tf.math.top_k(label, tf.cast(tf.math.count_nonzero(label), tf.int32))
+        # #     print("correct", idxs, idxs_l)
+        # ret = (1-jac)*smooth
+        # print(ret)
 
 
         # intersection = tf.keras.backend.sum(tf.keras.backend.abs(y_true * y_pred), axis=-1)
@@ -234,35 +239,7 @@ class MPLayer(Layer):
         :return: A dictionary from some 'msg' to all the messages
         computed for each edge.
         """
-        # one layer for node feature weights
-        # one later for edge feature weights
-        # messageLayer combination of these two layers
 
-        # srcs = edges.src['atomic_number']
-        # dsts = edges.dst['atomic_number']
-        #
-        # e_idxs = tf.argmax(edges.data['edge_feats'], axis=1)
-        # s_idxs = tf.argmax(srcs, axis=1)
-        # d_idxs = tf.argmax(dsts, axis=1)
-        #
-        # # size: (num nodes, 114, 114, 5)
-        # multi_hots = np.zeros((len(edges), self.num_atoms, self.num_atoms, self.num_bonds))
-        #
-        # c = 0
-        # # find a way to vectorize this
-        # for s,d,b in zip(s_idxs, d_idxs, e_idxs):
-        #     multi_hots[c, s, d, b] = 1
-        #     c += 1
-        #
-        # # this verifies we have it correct, we end up with 28 total nonzero indices,
-        # # which is equal to the number of nodes
-        # # print(np.count_nonzero(multi_hots), np.nonzero(multi_hots))
-        #
-        # res = self.bondLayer(tf.reshape(multi_hots, (len(edges), self.num_bonds*self.num_atoms*self.num_atoms)))
-        #
-        # # broadcast the num_edges x 1 bond representation to representation of node features
-        # out = tf.math.multiply(res, self.messageLayer(edges.src['node_feats']))
-        # m = tf.math.multiply(edges.src['node_feats'], edges.dst['node_feats'])
         mul = tf.math.multiply(tf.transpose(edges.src['node_feats']), edges.data['edge_feats'])
         out = tf.transpose(mul)
         msg = self.messageLayer(out)
@@ -354,20 +331,9 @@ def build_graph(smiles):
     na = np.array(bonds)
     tup = zip(na[:,2], na[:,2])
     bond_data = tf.convert_to_tensor(list(itertools.chain(*tup)))
-    assert(len(bond_data) == 2*len(bonds))
     bond_data = tf.cast(bond_data, tf.float32)
     # build dgl graph
     dgl_graph = dgl.from_networkx(g)
-
-    # some fancy magic to set edata to the strength of bond
-    # edge_data = []
-    # dict = {frozenset((e1, e2)) : d for e1, e2, d in na}
-    # src, dest  = dgl_graph.edges()
-    # for e in zip(src.numpy(), dest.numpy()):
-    #     bond = dict[frozenset(e)]
-    #     edge_data.append(bond)
-    # edge_d_tensor = tf.convert_to_tensor(edge_data)
-    # print(edge_d_tensor)
 
     dgl_graph.ndata['node_feats'] = node_feats
     dgl_graph.edata['edge_feats'] = bond_data
@@ -397,11 +363,11 @@ def train(model, train_data, train_labels):
     max_divisor = len(train_data) - (len(train_data) % model.batch_size)
     losses = []
 
-    idxs = np.arange(len(train_data))
-    np.random.shuffle(idxs)
-    tf.convert_to_tensor(idxs)
-    train_data = train_data[idxs]
-    tf.gather(train_labels, idxs)
+    # idxs = np.arange(len(train_data))
+    # np.random.shuffle(idxs)
+    # tf.convert_to_tensor(idxs)
+    # train_data = train_data[idxs]
+    # tf.gather(train_labels, idxs)
 
     for k in range(0, max_divisor, model.batch_size):
         batch_inputs = train_data[k:(k+model.batch_size)]
@@ -414,18 +380,16 @@ def train(model, train_data, train_labels):
         g_batched = dgl.batch(graphs)
         with tf.GradientTape() as tape:
             logits = model.call(g_batched)
-            # print(logits)
-            # logits = tf.dtypes.cast(logits[0], tf.int32)
-            # losses = model.loss_function(logits, labels)
-            loss = tf.nn.sigmoid_cross_entropy_with_logits(labels, logits)
+            # loss = model.loss_function(logits, labels)
+            loss = tf.math.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels, logits))
         # print(model.trainable_variables)
         gradients = tape.gradient(loss, model.trainable_variables)
         model.opt.apply_gradients(zip(gradients, model.trainable_variables))
         loss = tf.math.reduce_mean(loss)
         losses.append(loss)
         # print(model.opt._decayed_lr(tf.float32))
-        if k % 50 == 0:
-            print(loss)
+        # if k % 50 == 0:
+        #     print(loss)
 
     return losses
 
@@ -468,6 +432,19 @@ def visualize_loss(loss):
     plt.plot(x, y, color ="red")
     plt.show()
 
+def visualize_accuracy(acc, rec):
+    x = np.arange(0, len(acc))
+    y = acc
+    a = np.arange(0, len(rec))
+    b = rec
+    plt.title("Accuracy")
+    plt.xlabel("Epoch")
+    plt.ylabel("Percentage")
+    plt.plot(x, y, color ="blue")
+    plt.plot(a, b, color = "red")
+    plt.show()
+
+
 def main():
     # TODO: Return the training and testing data from get_data
     # TODO: Instantiate model
@@ -476,15 +453,20 @@ def main():
      './data/vocab.txt')
 
     t_loss = []
+    t_acc = []
+    t_rec = []
     m = Model(len(vocab))
-    for i in range(8):
+    for i in range(75):
         print("training...", i)
         loss = train(m, train_mols, tf.convert_to_tensor(train_labs, dtype=tf.float32))
         t_loss = t_loss + list(loss)
         print("testing...", i)
         acc, rec = test(m, valid_mols, tf.convert_to_tensor(valid_labs, dtype=tf.float32))
+        t_acc.append(acc)
+        t_rec.append(rec)
         print("testing accuracy:", acc, rec)
     visualize_loss(t_loss)
+    visualize_accuracy(t_acc, t_rec)
 
 
 if __name__ == '__main__':
