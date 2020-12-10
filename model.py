@@ -26,11 +26,10 @@ class Model(tf.keras.Model):
         super(Model, self).__init__()
 
         # TODO: Initialize hyperparameters
-        self.raw_features = 119
         self.num_classes = vocab_size
         self.learning_rate = 3e-4
         self.hidden_size = 300
-        self.batch_size = 10
+        self.batch_size = 3
 
         self.opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
         self.liftLayer = tf.keras.layers.Dense(self.hidden_size)
@@ -58,7 +57,6 @@ class Model(tf.keras.Model):
         self.mp1.call(g)
         self.mp2.call(g)
         logits = self.readout(g,g.ndata['node_feats'])
-        # top_3 = tf.math.top_k(logits, k=3)
         return logits # check whether loss function requires set/list..
 
     def readout(self, g, node_feats):
@@ -280,7 +278,7 @@ def pt_lookup(atoms):
         elems.append(periodic_table[str(atom)[2:-1]])
 
     # convert to one hot
-    e_hot = tf.one_hot(elems, len(periodic_table))
+    e_hot = tf.one_hot(elems, len(periodic_table)+2)
     return e_hot
 
 def build_graph(smiles):
@@ -305,12 +303,23 @@ def build_graph(smiles):
     g = pysmiles.read_smiles(smiles)
 
     # get the features from the graph and convert to tensor
-    raw_node_feats = g.nodes(data='element')
+    elems = g.nodes(data='element')
+    h_count = g.nodes(data='hcount')
+    aros = g.nodes(data='aromatic')
+    raw_node_feats = []
+    for elem, data, aro in zip(elems, h_count, aros):
+        node = list(elem)
+        node.append(data[1])
+        node.append(aro[1]*1)
+        raw_node_feats.append(node)
     na = np.array(list(raw_node_feats))
     byte_node_feats = tf.convert_to_tensor(na[:,1])
+
     # turn the byte string node feats into one_hot node feats
-    node_feats = pt_lookup(byte_node_feats)
-    # print("node_feats",node_feats)
+    node_feats = pt_lookup(byte_node_feats).numpy()
+    node_feats[:, -2] = na[:, 2]
+    node_feats[:, -1] = na[:, 3]
+    node_feats = tf.convert_to_tensor(node_feats)
 
     # get edge data and extract bonds, then convert to tensor
     edata = g.edges(data='order')
@@ -322,22 +331,16 @@ def build_graph(smiles):
     dgl_graph = dgl.from_networkx(g)
 
     # some fancy magic to set edata to the strength of bond
-    edge_data = []
-    dict = {frozenset((e1, e2)) : d for e1, e2, d in na}
-    src, dest  = dgl_graph.edges()
-    for e in zip(src.numpy(), dest.numpy()):
-        bond = dict[frozenset(e)]
-        if bond == 1.5:
-            bond = 5
-        edge_data.append(int(bond))
-    edge_d_tensor = tf.convert_to_tensor(edge_data)
-    #convert to one_hot tensor
-
-    edge_oh = tf.one_hot(edge_d_tensor, 5)
+    # edge_data = []
+    # dict = {frozenset((e1, e2)) : d for e1, e2, d in na}
+    # src, dest  = dgl_graph.edges()
+    # for e in zip(src.numpy(), dest.numpy()):
+    #     bond = dict[frozenset(e)]
+    #     edge_data.append(int(bond))
+    # edge_d_tensor = tf.convert_to_tensor(edge_data)
 
     dgl_graph.ndata['node_feats'] = node_feats
-    dgl_graph.ndata['atomic_number'] = node_feats
-    dgl_graph.edata['edge_feats'] = edge_oh
+    # dgl_graph.edata['edge_feats'] = edge_d_tensor
 
     return dgl_graph
 
