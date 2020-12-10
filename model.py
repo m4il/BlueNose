@@ -6,6 +6,7 @@ import numpy as np
 import os
 import pysmiles
 import networkx
+import itertools
 os.environ['DGLBACKEND'] = "tensorflow"
 import dgl
 import numpy as np
@@ -27,19 +28,23 @@ class Model(tf.keras.Model):
 
         # TODO: Initialize hyperparameters
         self.num_classes = vocab_size
-        self.learning_rate = 3e-4
+        # self.learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=1e-4, decay_steps=100, decay_rate=0.95, staircase=True)
+        self.learning_rate = 1e-4
         self.hidden_size = 300
-        self.batch_size = 3
+        self.batch_size = 10
 
         self.opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
         self.liftLayer = tf.keras.layers.Dense(self.hidden_size)
         # self.readoutLayer = tf.keras.layers.Dense(self.num_classes, activation='sigmoid')
-        self.readoutLayer = tf.keras.layers.Dense(self.num_classes)
+        self.readoutLayer = tf.keras.layers.Dense(self.num_classes, activation='relu')
+        self.D1 = tf.keras.layers.Dense(self.num_classes)
+        self.Dropout = tf.keras.layers.Dropout(0.2)
+        self.D2 = tf.keras.layers.Dense(self.num_classes)
+        self.Dropout2 = tf.keras.layers.Dropout(0.1)
 
         self.mp = MPLayer(self.hidden_size,self.hidden_size)
         self.mp1 = MPLayer(self.hidden_size,self.hidden_size)
         self.mp2 = MPLayer(self.hidden_size,self.hidden_size)
-
 
     def call(self, g):
         """
@@ -56,7 +61,11 @@ class Model(tf.keras.Model):
         self.mp.call(g)
         self.mp1.call(g)
         self.mp2.call(g)
-        logits = self.readout(g,g.ndata['node_feats'])
+        read = self.readout(g,g.ndata['node_feats'])
+        d_1 = self.D1(read)
+        logits = self.Dropout2(d_1)
+        # logits = self.D2(d_1)
+        # logits = self.Dropout2(d_2)
         return logits # check whether loss function requires set/list..
 
     def readout(self, g, node_feats):
@@ -321,12 +330,13 @@ def build_graph(smiles):
     node_feats[:, -1] = na[:, 3]
     node_feats = tf.convert_to_tensor(node_feats)
 
-    # get edge data and extract bonds, then convert to tensor
+    # get edge data and extract bonds, double them, then convert to tensor
     edata = g.edges(data='order')
     bonds = list(edata)
     na = np.array(bonds)
-    t2 = tf.convert_to_tensor(na[:,2])
-
+    tup = zip(na[:,2], na[:,2])
+    bond_data = tf.convert_to_tensor(list(itertools.chain(*tup)))
+    bond_data = tf.cast(bond_data, tf.float32)
     # build dgl graph
     dgl_graph = dgl.from_networkx(g)
 
@@ -336,11 +346,12 @@ def build_graph(smiles):
     # src, dest  = dgl_graph.edges()
     # for e in zip(src.numpy(), dest.numpy()):
     #     bond = dict[frozenset(e)]
-    #     edge_data.append(int(bond))
+    #     edge_data.append(bond)
     # edge_d_tensor = tf.convert_to_tensor(edge_data)
+    # print(edge_d_tensor)
 
     dgl_graph.ndata['node_feats'] = node_feats
-    # dgl_graph.edata['edge_feats'] = edge_d_tensor
+    dgl_graph.edata['edge_feats'] = bond_data
 
     return dgl_graph
 
@@ -366,6 +377,13 @@ def train(model, train_data, train_labels):
     # TODO: Implement train with the docstring instructions
     max_divisor = len(train_data) - (len(train_data) % model.batch_size)
     l = []
+
+    idxs = np.arange(len(train_data))
+    np.random.shuffle(idxs)
+    tf.convert_to_tensor(idxs)
+    train_data = train_data[idxs]
+    tf.gather(train_labels, idxs)
+
     for k in range(0, max_divisor, model.batch_size):
         batch_inputs = train_data[k:(k+model.batch_size)]
         labels = tf.convert_to_tensor(train_labels[k:(k+model.batch_size)])
@@ -385,6 +403,9 @@ def train(model, train_data, train_labels):
         # print(model.trainable_variables)
         gradients = tape.gradient(losses, model.trainable_variables)
         model.opt.apply_gradients(zip(gradients, model.trainable_variables))
+        # print(model.opt._decayed_lr(tf.float32))
+        # if k%10 == 0:
+            # print(losses)
 
     return l
 
@@ -432,30 +453,16 @@ def main():
     train_mols, train_labs, valid_mols, valid_labs, test_mols, vocab = get_data('./data/test.csv', './data/train.csv', \
      './data/vocab.txt')
 
-    # train_m = []
-    # train_l = []
-    # for mol, lab in zip(train_mols, train_labs):
-    #     if tf.math.reduce_sum(lab) == 3:
-    #         train_m.append(mol)
-    #         train_l.append(lab)
-    #
-    # test_m = []
-    # test_l = []
-    # for mol, lab in zip(valid_mols, valid_labs):
-    #     if tf.math.reduce_sum(lab) == 3:
-    #         acc2 += 1
-    #         test_m.append(mol)
-    #         test_l.append(lab)
     t_loss = []
     m = Model(len(vocab))
-    for i in range(1):
+    for i in range(3):
         print("training...", i)
         loss = train(m, train_mols, tf.convert_to_tensor(train_labs, dtype=tf.float32))
         t_loss = t_loss + list(loss)
         print("testing...", i)
         acc = test(m, valid_mols, tf.convert_to_tensor(valid_labs, dtype=tf.float32))
         print("testing accuracy:", acc)
-    visualize_loss(loss)
+    visualize_loss(t_loss)
 
 
 if __name__ == '__main__':
