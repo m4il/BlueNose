@@ -28,19 +28,20 @@ class Model(tf.keras.Model):
 
         # TODO: Initialize hyperparameters
         self.num_classes = vocab_size
-        # self.learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=1e-4, decay_steps=100, decay_rate=0.95, staircase=True)
-        self.learning_rate = 1e-4
+        self.learning_rate = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=1e-4, decay_steps=200, decay_rate=0.95, staircase=True)
+        # self.learning_rate = 1e-4
         self.hidden_size = 300
-        self.batch_size = 10
+        self.batch_size = 50
 
         self.opt = tf.keras.optimizers.Adam(learning_rate=self.learning_rate)
         self.liftLayer = tf.keras.layers.Dense(self.hidden_size)
-        # self.readoutLayer = tf.keras.layers.Dense(self.num_classes, activation='sigmoid')
         self.readoutLayer = tf.keras.layers.Dense(self.num_classes, activation='relu')
-        self.D1 = tf.keras.layers.Dense(self.num_classes)
+        self.D1 = tf.keras.layers.Dense(self.num_classes, activation='relu')
         self.Dropout = tf.keras.layers.Dropout(0.2)
-        self.D2 = tf.keras.layers.Dense(self.num_classes)
+        self.D2 = tf.keras.layers.Dense(self.num_classes, activation='relu')
         self.Dropout2 = tf.keras.layers.Dropout(0.1)
+        self.D3 = tf.keras.layers.Dense(self.num_classes)
+        self.Dropout3 = tf.keras.layers.Dropout(0.75)
 
         self.mp = MPLayer(self.hidden_size,self.hidden_size)
         self.mp1 = MPLayer(self.hidden_size,self.hidden_size)
@@ -63,9 +64,11 @@ class Model(tf.keras.Model):
         self.mp2.call(g)
         read = self.readout(g,g.ndata['node_feats'])
         d_1 = self.D1(read)
-        logits = self.Dropout2(d_1)
-        # logits = self.D2(d_1)
-        # logits = self.Dropout2(d_2)
+        drop1 = self.Dropout2(d_1)
+        d_2 = self.D2(drop1)
+        drop2 = self.Dropout2(d_2)
+        d_3 = self.D3(drop2)
+        logits = self.Dropout3(d_3)
         return logits # check whether loss function requires set/list..
 
     def readout(self, g, node_feats):
@@ -108,7 +111,18 @@ class Model(tf.keras.Model):
     #
     #     return tf.math.divide(total_correct, total)
 
-    def accuracy_function(self, y_pred, y_true, smooth=100):
+    def recall_function(self, logits, labels):
+        t_rec = 0
+        for pred, label in zip(logits, labels):
+            rec = 0
+            idx = tf.math.top_k(pred, tf.cast(tf.math.count_nonzero(label), tf.int32))[1]
+            for i in idx:
+                if label[i] == 1:
+                    rec = 1
+            t_rec += rec
+        return t_rec/self.batch_size
+
+    def accuracy_function(self, y_pred, y_true):
         """
         Jaccard = (|X & Y|)/ (|X|+ |Y| - |X & Y|)
                 = sum(|A*B|)/(sum(|A|)+sum(|B|)-sum(|A*B|))
@@ -132,7 +146,7 @@ class Model(tf.keras.Model):
                     intersection += 1
             union -= intersection
             acc += intersection/union
-        acc /= len(y_pred)
+        acc /= self.batch_size
         return acc
 
 
@@ -248,8 +262,12 @@ class MPLayer(Layer):
         #
         # # broadcast the num_edges x 1 bond representation to representation of node features
         # out = tf.math.multiply(res, self.messageLayer(edges.src['node_feats']))
-        out = self.messageLayer(edges.src['node_feats'])
-        return {'msg' : out}
+        # m = tf.math.multiply(edges.src['node_feats'], edges.dst['node_feats'])
+        mul = tf.math.multiply(tf.transpose(edges.src['node_feats']), edges.data['edge_feats'])
+        out = tf.transpose(mul)
+        msg = self.messageLayer(out)
+        # msg = self.messageLayer(edges.src['node_feats'])
+        return {'msg' : msg}
 
     def reduce(self, nodes, is_testing=False):
         """
@@ -336,6 +354,7 @@ def build_graph(smiles):
     na = np.array(bonds)
     tup = zip(na[:,2], na[:,2])
     bond_data = tf.convert_to_tensor(list(itertools.chain(*tup)))
+    assert(len(bond_data) == 2*len(bonds))
     bond_data = tf.cast(bond_data, tf.float32)
     # build dgl graph
     dgl_graph = dgl.from_networkx(g)
@@ -376,7 +395,7 @@ def train(model, train_data, train_labels):
     # This is the loss function, usage: loss(labels, logits)
     # TODO: Implement train with the docstring instructions
     max_divisor = len(train_data) - (len(train_data) % model.batch_size)
-    l = []
+    losses = []
 
     idxs = np.arange(len(train_data))
     np.random.shuffle(idxs)
@@ -398,16 +417,17 @@ def train(model, train_data, train_labels):
             # print(logits)
             # logits = tf.dtypes.cast(logits[0], tf.int32)
             # losses = model.loss_function(logits, labels)
-            losses = tf.math.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(labels, logits))
-        l.append(losses)
+            loss = tf.nn.sigmoid_cross_entropy_with_logits(labels, logits)
         # print(model.trainable_variables)
-        gradients = tape.gradient(losses, model.trainable_variables)
+        gradients = tape.gradient(loss, model.trainable_variables)
         model.opt.apply_gradients(zip(gradients, model.trainable_variables))
+        loss = tf.math.reduce_mean(loss)
+        losses.append(loss)
         # print(model.opt._decayed_lr(tf.float32))
-        # if k%10 == 0:
-            # print(losses)
+        if k % 50 == 0:
+            print(loss)
 
-    return l
+    return losses
 
 def test(model, test_data, test_labels):
     """
@@ -423,6 +443,7 @@ def test(model, test_data, test_labels):
 
     max_divisor = len(test_data) - (len(test_data) % model.batch_size)
     acc = []
+    rec = []
     for k in range(0, max_divisor, model.batch_size):
         batch_inputs = test_data[k:(k+model.batch_size)]
         labels = tf.convert_to_tensor(test_labels[k:(k+model.batch_size)])
@@ -434,14 +455,15 @@ def test(model, test_data, test_labels):
         g_batched = dgl.batch(graphs)
         logits = model.call(g_batched)
         acc.append(model.accuracy_function(logits, labels))
+        rec.append(model.recall_function(logits, labels))
 
-    return tf.math.reduce_mean(acc)
+    return tf.math.reduce_mean(acc), tf.math.reduce_mean(rec)
 
 def visualize_loss(loss):
     x = np.arange(0, len(loss))
     y = loss
     plt.title("Losses")
-    plt.xlabel("Example")
+    plt.xlabel("Batch")
     plt.ylabel("Loss")
     plt.plot(x, y, color ="red")
     plt.show()
@@ -455,13 +477,13 @@ def main():
 
     t_loss = []
     m = Model(len(vocab))
-    for i in range(3):
+    for i in range(8):
         print("training...", i)
         loss = train(m, train_mols, tf.convert_to_tensor(train_labs, dtype=tf.float32))
         t_loss = t_loss + list(loss)
         print("testing...", i)
-        acc = test(m, valid_mols, tf.convert_to_tensor(valid_labs, dtype=tf.float32))
-        print("testing accuracy:", acc)
+        acc, rec = test(m, valid_mols, tf.convert_to_tensor(valid_labs, dtype=tf.float32))
+        print("testing accuracy:", acc, rec)
     visualize_loss(t_loss)
 
 
